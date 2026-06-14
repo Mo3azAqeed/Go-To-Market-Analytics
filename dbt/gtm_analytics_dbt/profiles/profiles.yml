@@ -1,0 +1,23 @@
+gtm_analytics:
+  outputs:
+    dev:
+      type: bigquery
+      project: <your-gcp-project-id>
+      dataset: gtm_analytics_dev
+      threads: 4
+      timeout_seconds: 300
+      location: US
+      priority: interactive
+      retries: 1
+      keyfile: <path-to-gcp-service-account-json>
+    prod:
+      type: bigquery
+      project: <your-gcp-project-id>
+      dataset: gtm_analytics_prod
+      threads: 8
+      timeout_seconds: 300
+      location: US
+      priority: batch
+      retries: 3
+      keyfile: <path-to-gcp-service-account-json>
+  target: dev

@@ -1,0 +1,20 @@
+cubes:
+  - name: orders
+    sql:
+      table: "`{dataSource}.marts_core.fct_orders`"
+    
+    dimensions:
+      - name: order_id
+        sql: order_id
+        type: string
+        primary_key: true
+      - name: seller_id
+        sql: seller_id
+        type: string
+    
+    measures:
+      - name: order_count
+        type: count
+      - name: gmv
+        sql: SUM(order_amount)
+        type: number

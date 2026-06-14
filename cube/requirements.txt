@@ -1,0 +1,3 @@
+cubejs-server>=0.34.0
+google-cloud-bigquery>=3.0.0
+python-dotenv>=0.19.0

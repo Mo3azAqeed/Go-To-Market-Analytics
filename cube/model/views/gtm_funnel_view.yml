@@ -1,0 +1,6 @@
+views:
+  - name: gtm_funnel_view
+    description: GTM funnel performance view (MQL to closed deal to first order)
+    cubes:
+      - funnel
+      - sellers

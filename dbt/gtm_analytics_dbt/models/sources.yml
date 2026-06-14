@@ -1,0 +1,44 @@
+version: 2
+
+sources:
+  - name: raw_attio
+    database: <gcp-project-id>
+    schema: raw_attio
+    freshness:
+      warn_after: { count: 8, period: hour }
+      error_after: { count: 24, period: hour }
+    loaded_at_field: _airbyte_extracted_at
+    tables:
+      - name: mqls
+        description: Marketing-qualified leads from Attio
+      - name: closed_deals
+        description: Closed deals from Attio
+      - name: sdrs
+        description: Sales development reps from Attio
+      - name: sales_activities
+        description: Sales activities from Attio
+
+  - name: raw_ops
+    database: <gcp-project-id>
+    schema: raw_ops
+    freshness:
+      warn_after: { count: 8, period: hour }
+      error_after: { count: 24, period: hour }
+    loaded_at_field: _airbyte_extracted_at
+    tables:
+      - name: orders
+        description: Orders from production ops DB
+      - name: order_items
+        description: Order items from production ops DB
+      - name: sellers
+        description: Sellers from production ops DB
+      - name: customers
+        description: Customers from production ops DB
+      - name: products
+        description: Products from production ops DB
+      - name: payments
+        description: Payments from production ops DB
+      - name: reviews
+        description: Reviews from production ops DB
+      - name: geolocation
+        description: Geolocation mapping from production ops DB

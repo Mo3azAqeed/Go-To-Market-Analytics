@@ -1,0 +1,51 @@
+# dbt
+dbt_packages/
+target/
+dbt.log
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Logs
+logs/
+*.log
+
+# Airbyte
+airbyte/connections/.local/
+airbyte/connections/.cache/
+airbyte/*/build/
+airbyte/*/.gradle/
+
+# Cube
+cube/.cubecachedir/
+cube/node_modules/
+
+# Misc
+*.csv~
+.credentials/
+secrets/

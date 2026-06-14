@@ -1,0 +1,6 @@
+views:
+  - name: partner_program_view
+    description: Partner eligibility and scoring view
+    cubes:
+      - partner_eligibility
+      - sellers

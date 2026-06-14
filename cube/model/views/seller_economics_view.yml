@@ -1,0 +1,6 @@
+views:
+  - name: seller_economics_view
+    description: Seller profitability and payback view
+    cubes:
+      - sellers
+      - orders

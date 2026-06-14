@@ -1,0 +1,19 @@
+cubes:
+  - name: funnel
+    sql:
+      table: "`{dataSource}.staging.stg_attio__mqls`"
+    
+    dimensions:
+      - name: mql_id
+        sql: mql_id
+        type: string
+        primary_key: true
+      - name: origin
+        sql: origin
+        type: string
+    
+    measures:
+      - name: mql_count
+        type: count
+        filters:
+          - sql: "mql_id IS NOT NULL"

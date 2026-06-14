@@ -1,0 +1,32 @@
+name: gtm_analytics
+version: '1.0.0'
+
+profile: gtm_analytics
+
+seed-paths: ["seeds"]
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+seeds:
+  gtm_analytics:
+    +schema: staging
+
+models:
+  gtm_analytics:
+    +static_analysis: strict
+    staging:
+      attio:
+        +materialized: view
+      ops:
+        +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      core:
+        +materialized: table
+      gtm:
+        +materialized: table

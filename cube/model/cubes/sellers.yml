@@ -1,0 +1,16 @@
+cubes:
+  - name: sellers
+    sql:
+      table: "`{dataSource}.marts_core.dim_seller`"
+    
+    dimensions:
+      - name: seller_id
+        sql: seller_id
+        type: string
+        primary_key: true
+    
+    measures:
+      - name: count
+        type: count
+        drill_members:
+          - seller_id

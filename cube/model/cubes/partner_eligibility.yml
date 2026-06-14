@@ -1,0 +1,15 @@
+cubes:
+  - name: partner_eligibility
+    sql:
+      table: "`{dataSource}.marts_gtm.partner_scorecard`"
+    
+    dimensions:
+      - name: seller_id
+        sql: seller_id
+        type: string
+        primary_key: true
+    
+    measures:
+      - name: partner_eligibility_score
+        sql: AVG(eligibility_score)
+        type: number

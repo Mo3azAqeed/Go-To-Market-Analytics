@@ -4,9 +4,9 @@ Analytics infrastructure for the go-to-market motion of a two-sided e-commerce m
 
 ## Quick Start
 
-1. **dbt (data transformation):** `cd dbt/gtm_analytics_dbt && dbt debug`
-2. **Cube (semantic layer):** `cd cube && cp .env.example .env && pip install -r requirements.txt`
-3. **Airbyte (ingestion):** See `airbyte/README.md`
+1. **dlt (ingestion):** `cd dlt && pip install -r requirements.txt`
+2. **dbt (data transformation):** `cd dbt/gtm_analytics_dbt && dbt debug`
+3. **Cube (semantic layer):** `cd cube && pip install -r requirements.txt`
 4. **Nao (agent):** See `nao/README.md`
 
 ## Repository Structure
@@ -16,7 +16,7 @@ Analytics infrastructure for the go-to-market motion of a two-sided e-commerce m
 ├── PROJECT.md              # Source of truth for this project
 ├── task_brief.md           # Engineering brief and acceptance test
 ├── README.md               # This file
-├── airbyte/                # Data ingestion (custom connectors)
+├── dlt/                    # Data ingestion (dlt pipelines + CDC)
 ├── dbt/gtm_analytics_dbt/  # Data transformation and marts
 ├── cube/                   # Semantic layer (metrics & dimensions)
 ├── nao/                    # Agent runtime (Slack integration)
@@ -26,7 +26,7 @@ Analytics infrastructure for the go-to-market motion of a two-sided e-commerce m
 
 ## Phases
 
-1. **Phase 0:** Airbyte custom connectors (`source-attio`, `source-ops`)
+1. **Phase 0:** dlt pipelines — Attio (REST, incremental) + ops DB (CDC via Postgres WAL)
 2. **Phase 1:** dbt foundation (staging, marts, tests)
 3. **Phase 2:** Cube semantic layer
 4. **Phase 3:** Nao agent and test suite
@@ -47,7 +47,7 @@ The GTM team needs answers to three questions:
 - `dbt/README.md` — dbt setup and running models
 - `cube/README.md` — Cube semantic layer and cubes
 - `nao/README.md` — Agent context and configuration
-- `airbyte/README.md` — Connector setup and deployment
+- `dlt/README.md` — Pipeline setup, CDC configuration, and running locally
 
 ## Notes
 

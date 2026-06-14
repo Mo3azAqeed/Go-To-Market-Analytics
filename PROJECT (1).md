@@ -1,6 +1,6 @@
 # Olist GTM Analytics
 
-Analytics infrastructure for the go-to-market motion of a two-sided e-commerce marketplace. Source systems are **Attio** (CRM — leads, closed deals, sales activity) and a **production operational database** (orders, items, sellers, payments, reviews). Both are ingested into BigQuery via Airbyte custom connectors and modeled with dbt, Cube, and Nao.
+Analytics infrastructure for the go-to-market motion of a two-sided e-commerce marketplace. Source systems are **Attio** (CRM — leads, closed deals, sales activity) and a **production operational database** (orders, items, sellers, payments, reviews). Both are ingested into BigQuery via dlt pipelines (REST API incremental sync for Attio; CDC via Postgres logical replication for the ops DB) and modeled with dbt, Cube, and Nao.
 
 This file is the canonical context for any human or AI agent working in this repo. If something in code disagrees with this file, this file wins until updated.
 
@@ -22,16 +22,16 @@ Every model, metric, ingestion stream, and agent rule in this repo exists to ser
 
 | Layer            | Tool                                        | Role                                                                            |
 |------------------|---------------------------------------------|---------------------------------------------------------------------------------|
-| Source systems   | Attio, production ops DB                    | Systems of record. Attio = CRM/funnel. Ops DB = orders, items, sellers.         |
-| Ingestion        | Airbyte (self-hosted) + custom connectors   | `source-attio` and `source-ops` land raw data into BigQuery.                    |
+| Source systems   | Attio, production ops DB (Postgres)         | Systems of record. Attio = CRM/funnel. Ops DB = orders, items, sellers.         |
+| Ingestion        | dlt (Python library) + CDC                  | `attio_pipeline` and `ops_pipeline` land raw data into BigQuery. No separate server. |
 | Storage / compute| BigQuery                                    | Raw, staging, and modeled tables. Project: `<gcp-project-id>`.                  |
 | Transformation   | dbt-core (BigQuery adapter)                 | All SQL that produces tables/views. Lineage, tests, docs.                       |
 | Semantic layer   | Cube (self-hosted Core)                     | Single definition of every business metric. Compiles to SQL against BigQuery.   |
 | Agent runtime    | Nao (self-hosted)                           | Reads warehouse schema + dbt repo + Cube model as context. Answers questions.   |
 | LLM              | Kimi (via OpenRouter)                       | Reasoning engine for Nao. BYO key.                                              |
-| CI/CD            | GitHub Actions + Copilot                    | Four workflows: Airbyte CI, dbt CI, Nao CI, nightly freshness check.            |
+| CI/CD            | GitHub Actions + Copilot                    | Four workflows: dlt CI, dbt CI, Nao CI, nightly freshness check.                |
 
-**Layer rule.** Airbyte ingests, dbt transforms, Cube defines, Nao answers. Each layer owns exactly one job. No business logic in Airbyte. No metric definitions in dbt models. No transformations in Cube. No domain facts hardcoded in agent prompts.
+**Layer rule.** dlt ingests, dbt transforms, Cube defines, Nao answers. Each layer owns exactly one job. No business logic in dlt pipelines. No metric definitions in dbt models. No transformations in Cube. No domain facts hardcoded in agent prompts.
 
 ---
 
@@ -40,23 +40,15 @@ Every model, metric, ingestion stream, and agent rule in this repo exists to ser
 ```
 .
 ├── PROJECT.md
-├── airbyte/
-│   ├── connectors/
-│   │   ├── source-attio/
-│   │   │   ├── source_attio/        ← Python CDK package
-│   │   │   ├── unit_tests/
-│   │   │   ├── integration_tests/
-│   │   │   ├── acceptance-test-config.yml
-│   │   │   ├── metadata.yaml
-│   │   │   ├── Dockerfile
-│   │   │   ├── requirements.txt
-│   │   │   └── README.md
-│   │   └── source-ops/
-│   │       └── ... (same structure)
-│   ├── connections/
-│   │   ├── attio_to_bigquery.yaml   ← connection config (streams, schedule, normalization)
-│   │   └── ops_to_bigquery.yaml
-│   └── README.md
+├── dlt/
+│   ├── pipelines/
+│   │   ├── attio_pipeline.py        ← dlt REST API source → BigQuery (incremental)
+│   │   └── ops_pipeline.py          ← dlt pg_replication CDC → BigQuery
+│   ├── sources/
+│   │   ├── attio/                   ← Attio REST API source definition
+│   │   └── ops/                     ← Postgres CDC source definition
+│   ├── .dlt/                        ← dlt config & secrets (gitignored)
+│   └── requirements.txt
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles/
@@ -89,7 +81,7 @@ Every model, metric, ingestion stream, and agent rule in this repo exists to ser
 │       └── question_set.yaml
 ├── .github/
 │   └── workflows/
-│       ├── airbyte_ci.yml           ← connector tests + build + publish image
+│       ├── dlt_ci.yml               ← runs dlt pipeline tests on PR
 │       ├── dbt_ci.yml               ← compile, parse, build, test on PR
 │       ├── nao_ci.yml               ← runs nao test on changes to /nao or /cube
 │       ├── freshness.yml            ← nightly source freshness check
@@ -101,37 +93,40 @@ Every model, metric, ingestion stream, and agent rule in this repo exists to ser
 
 ## 4. Data sources and ingestion
 
-### 4.1 Attio (`source-attio` → `raw_attio`)
+### 4.1 Attio (`attio_pipeline.py` → `raw_attio`)
 
-Built with the Airbyte Python CDK. Authenticates via Attio API token (stored as a GitHub Actions secret and Airbyte connector secret; never committed).
+Built with dlt's `rest_api` source. Authenticates via Attio API token stored in `.dlt/secrets.toml` locally and as a GitHub Actions secret in CI. Never committed.
 
-Streams pulled from Attio:
+Streams:
 
-| Stream             | Attio object        | Sync mode                | Cursor field      | Notes                                                                  |
+| Stream             | Attio object        | dlt mode                 | Cursor field      | Notes                                                                  |
 |--------------------|---------------------|--------------------------|-------------------|------------------------------------------------------------------------|
-| `mqls`             | Lists/People        | Incremental + dedup      | `last_modified`   | MQLs. Includes `mql_id`, `origin`, `first_contact_date`.               |
-| `closed_deals`     | Records/Deals       | Incremental + dedup      | `last_modified`   | Won deals. Includes `mql_id`, `seller_id`, `won_date`, `business_segment`, `lead_type`. |
-| `sdrs`             | Workspace members   | Full refresh + overwrite | —                 | Reps. Low cardinality.                                                  |
-| `sales_activities` | Notes/Tasks         | Incremental + append     | `created_at`      | Future use — outreach activity per deal.                                |
+| `mqls`             | Lists/People        | Incremental              | `last_modified`   | MQLs. Includes `mql_id`, `origin`, `first_contact_date`.               |
+| `closed_deals`     | Records/Deals       | Incremental              | `last_modified`   | Won deals. Includes `mql_id`, `seller_id`, `won_date`, `business_segment`, `lead_type`. |
+| `sdrs`             | Workspace members   | Replace (full refresh)   | —                 | Reps. Low cardinality.                                                  |
+| `sales_activities` | Notes/Tasks         | Append                   | `created_at`      | Future use — outreach activity per deal.                                |
 
-### 4.2 Production ops DB (`source-ops` → `raw_ops`)
+### 4.2 Production ops DB (`ops_pipeline.py` → `raw_ops`)
 
-Built with the Airbyte Python CDK. Authenticates via service-account credentials stored in Airbyte's secret store.
+Built with dlt's `pg_replication` source (CDC via Postgres logical replication / WAL). Authenticates via connection string in `.dlt/secrets.toml`. Requires `wal_level = logical` on the Postgres instance and a replication slot per table.
 
-| Stream         | Grain                          | Sync mode                | Cursor field   | Notes                                                                  |
-|----------------|--------------------------------|--------------------------|----------------|------------------------------------------------------------------------|
-| `orders`       | one row per order_id           | Incremental + dedup      | `updated_at`   | `order_status` ∈ {delivered, shipped, invoiced, canceled, ...}.        |
-| `order_items`  | one row per (order_id, item)   | Incremental + dedup      | `updated_at`   | Multiple rows per order. See §6 gotcha 1.                              |
-| `sellers`      | one row per seller_id          | Incremental + dedup      | `updated_at`   | The seller dimension.                                                  |
-| `customers`    | one row per customer_id        | Incremental + dedup      | `updated_at`   | `customer_id` ≠ `customer_unique_id`. See §6 gotcha 6.                 |
-| `products`     | one row per product_id         | Incremental + dedup      | `updated_at`   | Category in Portuguese. Translation seed in dbt.                       |
-| `payments`     | one row per payment            | Incremental + append     | `created_at`   | One order can have multiple payments.                                  |
-| `reviews`      | one row per review_id          | Incremental + dedup      | `updated_at`   | Sparse. Some orders have no review.                                    |
-| `geolocation`  | many rows per zip prefix       | Full refresh + overwrite | —              | Static. Aggregate in staging.                                          |
+| Stream         | Grain                          | dlt mode      | Notes                                                                  |
+|----------------|--------------------------------|---------------|------------------------------------------------------------------------|
+| `orders`       | one row per order_id           | CDC (merge)   | `order_status` ∈ {delivered, shipped, invoiced, canceled, ...}.        |
+| `order_items`  | one row per (order_id, item)   | CDC (merge)   | Multiple rows per order. See §6 gotcha 1.                              |
+| `sellers`      | one row per seller_id          | CDC (merge)   | The seller dimension.                                                  |
+| `customers`    | one row per customer_id        | CDC (merge)   | `customer_id` ≠ `customer_unique_id`. See §6 gotcha 6.                 |
+| `products`     | one row per product_id         | CDC (merge)   | Category in Portuguese. Translation seed in dbt.                       |
+| `payments`     | one row per payment            | CDC (append)  | One order can have multiple payments.                                  |
+| `reviews`      | one row per review_id          | CDC (merge)   | Sparse. Some orders have no review.                                    |
+| `geolocation`  | many rows per zip prefix       | Replace       | Static. Aggregate in staging.                                          |
+
+**CDC note.** dlt `pg_replication` captures INSERT, UPDATE, and DELETE events from the Postgres WAL. Each synced row includes `_dlt_cdc_event` (`insert`/`update`/`delete`). The staging layer in dbt filters out deleted rows before exposing data to marts.
 
 ### 4.3 Sync schedule and freshness SLA
 
-- Default schedule: **every 6 hours** for `raw_ops`, **every 1 hour** for `raw_attio` (CRM moves faster).
+- Attio pipeline: **every 1 hour** via GitHub Actions scheduled workflow (CRM moves faster).
+- Ops CDC pipeline: **every 15 minutes** via GitHub Actions scheduled workflow (near-real-time).
 - `dbt/sources.yml` declares freshness SLAs: `warn_after: 8 hours, error_after: 24 hours` on every raw table.
 - The nightly `freshness.yml` workflow runs `dbt source freshness` and fails the build if any source breaches.
 
@@ -173,8 +168,8 @@ A dbt singular test in `dbt/tests/seller_id_bridge_integrity.sql` must fail the 
 10. **Date filters are parameterized.** Never bake in a year.
 11. **Cross-system `seller_id` drift.** Attio operators paste `seller_id` manually; typos and stale IDs happen. The bridge integrity test (§4.4) runs on every dbt build.
 12. **Attio schema drift.** Attio lets users add custom attributes. The `source-attio` connector pins schemas in `manifest.yaml` or `schemas/*.json`. When the source adds a field, the connector is updated in a PR. **No auto-discovery.**
-13. **Airbyte JSON columns.** When Airbyte normalizes Attio nested objects, you get JSON columns in BigQuery. Use `JSON_VALUE()` in staging to flatten the fields you need. Never `SELECT *` from a JSON-heavy raw table.
-14. **Airbyte `_airbyte_*` metadata.** Every raw table has `_airbyte_raw_id`, `_airbyte_extracted_at`, `_airbyte_meta`. Use `_airbyte_extracted_at` as the loaded-at timestamp for source freshness, **not** for business event times.
+13. **Attio JSON columns.** Attio nested objects land as JSON columns in BigQuery. Use `JSON_VALUE()` in staging to flatten the fields you need. Never `SELECT *` from a JSON-heavy raw table.
+14. **dlt `_dlt_*` metadata.** Every raw table has `_dlt_id` (row hash), `_dlt_load_id` (unix float), and `_extracted_at` (timestamp added by the pipeline). Use `_extracted_at` as the loaded-at timestamp for source freshness, **not** for business event times. For CDC tables, `_dlt_cdc_event` holds `insert`/`update`/`delete`.
 
 ---
 
@@ -202,7 +197,7 @@ Implemented in Cube. Plain-English versions in `nao/docs/business_defs.md`.
 
 ## 8. Layer ownership rules
 
-- **Add a new source field** (from Attio or ops DB): Airbyte connector schema first, then dbt staging, then propagate. One PR per layer, or one PR touching all layers explicitly labeled.
+- **Add a new source field** (from Attio or ops DB): update the dlt source definition first, then dbt staging, then propagate. One PR per layer, or one PR touching all layers explicitly labeled.
 - **Add a new transformation**: dbt only. Update tests.
 - **Add a new metric**: Cube only. Backing SQL must reference a dbt mart, never raw tables.
 - **Add a new business term**: `nao/docs/business_defs.md` and `nao/docs/glossary.md`. If it implies a metric, define it in Cube first.
@@ -216,16 +211,14 @@ Violations are PR blockers.
 
 Four GitHub Actions workflows, all required to pass before merge to `main`.
 
-### 9.1 `airbyte_ci.yml`
+### 9.1 `dlt_ci.yml`
 
-Triggers on changes under `airbyte/connectors/**`.
+Triggers on changes under `dlt/**`.
 
-1. `pip install -r requirements.txt` for the changed connector.
-2. `pytest unit_tests/` — fast unit tests.
-3. `airbyte-ci connectors --name=source-<x> test` — runs the standard Airbyte connector acceptance test suite (CAT) against fixtures.
-4. `docker build` the connector image.
-5. On merge to `main`: tag the image with the commit SHA and `latest`, push to GitHub Container Registry (GHCR).
-6. Post a PR comment with the new image tag so Airbyte can be updated to point at it.
+1. `pip install -r dlt/requirements.txt`.
+2. `pytest dlt/sources/attio/tests/` and `pytest dlt/sources/ops/tests/` — unit tests for each source.
+3. Run each pipeline in `--dry-run` mode against fixture data to validate schema and cursor logic.
+4. On merge to `main`: run a full pipeline sync against the staging BigQuery dataset.
 
 ### 9.2 `dbt_ci.yml`
 
@@ -259,13 +252,13 @@ Nightly cron (`0 6 * * *` UTC).
 ## 10. What not to do
 
 - Do not write SQL against `raw_attio.*` or `raw_ops.*` outside the staging layer.
-- Do not put business logic in an Airbyte connector. Connectors *extract*. Period.
+- Do not put business logic in a dlt pipeline. Pipelines *extract and load*. Period.
 - Do not define a metric in two places.
 - Do not let the agent write freeform SQL when a Cube measure exists.
 - Do not hardcode dates, commission rates, CAC values, or partner weights in models.
 - Do not assume the agent's training data knows this schema. Every domain term lives in `business_defs.md` or `glossary.md` or it does not exist.
 - Do not merge a PR that drops `nao test` below threshold without a written justification.
-- Do not enable Airbyte's "auto schema propagation" without a PR. Schema changes are reviewed.
+- Do not change a dlt source schema without a PR. Schema changes propagate to BigQuery and can break downstream dbt models.
 
 ---
 

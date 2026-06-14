@@ -8,15 +8,27 @@ Phase 0 through Phase 4. Acceptance test at the end.
 | **To** | Analytics Engineer (you) |
 | **From** | Tech Lead, Data & Analytics |
 | **Project** | Olist GTM Analytics (two-sided marketplace) |
-| **Stack** | Airbyte (custom connectors), BigQuery, dbt-core, Cube, Nao, Kimi via OpenRouter, GitHub Actions + Copilot |
+| **Stack** | dlt (pipelines + CDC), BigQuery, dbt-core, Cube, Nao, Kimi via OpenRouter, GitHub Actions + Copilot |
 | **Repo context** | See `PROJECT.md` at repo root. Source of truth for this brief. |
 | **Estimated effort** | 5–7 weeks, part time. Phases are sequential. |
 
 ---
 
+## Progress tracker
+
+| Phase | Status | PR |
+|-------|--------|----|
+| Phase 0 — dlt ingestion (Attio + ops CDC) | **IN PROGRESS** | — |
+| Phase 1 — dbt foundation | Not started | — |
+| Phase 2 — Cube semantic layer | Not started | — |
+| Phase 3 — Nao agent | Not started | — |
+| Phase 4 — Analysis writeup | Not started | — |
+
+---
+
 ## Context
 
-We are building the analytics infrastructure for a two-sided marketplace GTM motion. The data lives in two source systems: **Attio** (CRM — leads, closed deals, sales activity) and our **production operational database** (orders, items, sellers). Both are being migrated into BigQuery via Airbyte. From there, dbt transforms, Cube defines, and Nao answers.
+We are building the analytics infrastructure for a two-sided marketplace GTM motion. The data lives in two source systems: **Attio** (CRM — leads, closed deals, sales activity) and our **production operational database** (orders, items, sellers). Both are being migrated into BigQuery via dlt pipelines (Attio via REST API incremental sync; ops DB via CDC using Postgres logical replication). From there, dbt transforms, Cube defines, and Nao answers.
 
 The GTM team needs three questions answered repeatedly and reliably: how the funnel converts, how long it takes a seller to become profitable, and which sellers qualify for the partner program. Read `PROJECT.md` §1 before you start. If anything in this brief contradicts `PROJECT.md`, `PROJECT.md` wins and you raise it with me.
 
@@ -28,12 +40,12 @@ Deliver a working stack where a GTM operator can ask the agent a question in Sla
 
 ### In scope
 
-- Two Airbyte custom connectors: `source-attio` (CRM) and `source-ops` (production DB).
+- Two dlt pipelines: `attio_pipeline` (REST API, incremental) and `ops_pipeline` (Postgres CDC via WAL).
 - Both landing data into BigQuery under `raw_attio` and `raw_ops`.
 - dbt models: staging, intermediate where needed, core marts, GTM marts.
 - Cube semantic layer covering sellers, funnel, orders, and partner eligibility.
 - Nao agent context (config, rules, business definitions, example queries, test suite).
-- CI/CD via GitHub Actions: four workflows (Airbyte, dbt, Nao, freshness). Copilot for automated PR review.
+- CI/CD via GitHub Actions: four workflows (dlt, dbt, Nao, freshness). Copilot for automated PR review.
 - A short written analysis (≤ 5 pages) covering funnel, payback, and partner eligibility findings.
 
 ### Out of scope
@@ -49,29 +61,27 @@ Deliver a working stack where a GTM operator can ask the agent a question in Sla
 
 Each phase ends with a concrete deliverable I can review. **Do not start phase N+1 until phase N is merged.**
 
-### Phase 0 — Ingestion (Airbyte custom connectors)
+### Phase 0 — Ingestion (dlt pipelines + CDC)
 
 **Target duration:** 1.5 weeks.
 
-Build the data ingestion that everything else depends on. Without this phase, you have no pipeline — only files. The goal is two production-grade Airbyte connectors that sync on a schedule and land typed data into BigQuery.
+Build the data ingestion that everything else depends on. The goal is two dlt pipelines — one for Attio (REST API, incremental) and one for the ops DB (Postgres CDC via WAL) — that run on a schedule and land typed data into BigQuery. No separate server required; dlt is a Python library.
 
 **Tasks**
 
-1. Stand up Airbyte self-hosted (Docker Compose locally for dev; we can decide on production deployment later). Document the setup in `airbyte/README.md`.
-2. Scaffold `airbyte/connectors/source-attio/` using the Airbyte Python CDK (`airbyte-ci connectors generate`). Implement the four streams listed in `PROJECT.md` §4.1: `mqls`, `closed_deals`, `sdrs`, `sales_activities`. Use incremental + dedup mode for the first two; full refresh for `sdrs`; incremental + append for `sales_activities`.
-3. Pin Attio schemas explicitly in `source_attio/schemas/*.json`. No auto-discovery (see `PROJECT.md` §6 gotcha 12).
-4. Write `unit_tests/` covering: stream listing, schema validation, incremental cursor logic, pagination, and one auth failure case.
-5. Write `acceptance-test-config.yml` and run `airbyte-ci connectors --name=source-attio test`. Make it pass.
-6. Repeat steps 2–5 for `source-ops` with the eight streams in `PROJECT.md` §4.2. The ops connector is mostly database-driven; if the source is Postgres, you may extend Airbyte's existing Postgres source rather than write from scratch — call this out in the PR.
-7. Configure two Airbyte connections in `airbyte/connections/`: `attio_to_bigquery.yaml` (hourly) and `ops_to_bigquery.yaml` (every 6 hours). Destinations land in `raw_attio` and `raw_ops` datasets in BigQuery.
-8. Trigger one full sync of each connector. Confirm row counts match expectations and `_airbyte_extracted_at` populates correctly.
-9. Build `.github/workflows/airbyte_ci.yml` per `PROJECT.md` §9.1. The workflow must: install deps, run unit tests, run the Airbyte connector acceptance test suite (CAT), build the Docker image, and on merge to `main` push to GHCR tagged with the commit SHA.
-10. Store all secrets (Attio API token, ops DB credentials, GHCR token) as GitHub Actions secrets and as Airbyte connector secrets. Nothing committed.
+1. Install dlt: `pip install "dlt[bigquery]" "dlt[postgres]"`. Document the setup in `dlt/README.md`.
+2. Build `dlt/pipelines/attio_pipeline.py`. Use dlt's `rest_api` source to pull the four Attio streams (`mqls`, `closed_deals`, `sdrs`, `sales_activities`) per `PROJECT.md` §4.1. Configure incremental cursors on `last_modified`; replace mode for `sdrs`; append for `sales_activities`. Add `_extracted_at = pendulum.now()` to every row for freshness tracking.
+3. Build `dlt/pipelines/ops_pipeline.py`. Use dlt's `pg_replication` source for CDC. Enable logical replication on the Postgres source (`wal_level = logical`). Create a replication slot and publication for the eight ops tables. Configure merge write disposition for transactional tables; replace for `geolocation`.
+4. Configure BigQuery destination in `.dlt/secrets.toml` (local) and GitHub Actions secrets (CI). Land data in `raw_attio` and `raw_ops` datasets. Nothing committed.
+5. Write unit tests in `dlt/sources/attio/tests/` and `dlt/sources/ops/tests/` covering: schema validation, cursor progression, CDC event types (insert/update/delete), and auth failure.
+6. Run each pipeline once manually. Confirm row counts match source, `_extracted_at` populates, and `_dlt_cdc_event` appears on ops tables.
+7. Build `.github/workflows/dlt_ci.yml` per `PROJECT.md` §9.1: install deps, run unit tests, dry-run pipeline against fixture data, and on merge to `main` run a full sync against the staging BigQuery dataset.
+8. Build `.github/workflows/freshness.yml`: nightly cron, `dbt source freshness`, Slack alert on failure.
 
 **Phase 0 deliverable**
 
-- A merged PR titled `feat(airbyte): source-attio and source-ops connectors` containing both connectors, all tests passing, CI green, and one successful sync of each visible in the Airbyte UI.
-- `airbyte/README.md` explaining how to run the connectors locally and how to bump versions in production.
+- A merged PR titled `feat(dlt): attio and ops pipelines` with both pipelines, all tests passing, CI green, and one successful run of each pipeline confirmed by row counts in BigQuery.
+- `dlt/README.md` explaining how to run pipelines locally, how to configure CDC on a new Postgres instance, and how to add a new stream.
 
 ### Phase 1 — dbt foundation
 
@@ -206,7 +216,7 @@ When ready:
 ## Notes and gotchas
 
 - Do not skip `PROJECT.md` §6. Every gotcha there is something I have watched someone get wrong. Read it twice. Pay special attention to #11 (seller_id drift), #12 (Attio schema drift), and #13 (JSON columns) — these are new to this project.
-- Airbyte connectors do *extract*. No filtering for business logic, no renaming to nice names, no derived columns. That's dbt's job. If you find yourself writing a SQL transform inside a connector, stop.
+- dlt pipelines do *extract and load*. No filtering for business logic, no renaming to nice names, no derived columns. That's dbt's job. If you find yourself writing a SQL transform inside a pipeline, stop.
 - If a closed deal in Attio has no matching seller in ops, do not silently drop it. Surface it in a `dbt/models/intermediate/int_attio__orphan_deals.sql` model and let the bridge integrity test flag the rate.
 - If you find yourself writing complex SQL inside Cube, stop. The transformation belongs in dbt. Add a model, expose it as a clean table, write the Cube measure on top.
 - Business definitions never live in `RULES.md` or the agent prompt. They live in `business_defs.md` or as Cube measures.

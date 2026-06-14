@@ -1,0 +1,4 @@
+dlt[bigquery]>=1.0.0
+dlt[postgres]>=1.0.0
+psycopg2-binary>=2.9
+pendulum>=3.0

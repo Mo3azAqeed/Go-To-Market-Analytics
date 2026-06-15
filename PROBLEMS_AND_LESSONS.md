@@ -4,6 +4,86 @@ Running log of every problem hit during this build, what we tried, and what we c
 
 ---
 
+## P-007 — dbt CI failed in 7s: requirements.txt missing, cache-dependency-path broke setup-python
+
+**Phase:** Phase 1 (dbt foundation)
+**Date:** 2026-06-15
+
+### Problem
+The `dbt_ci.yml` workflow failed immediately with:
+```
+No file in /home/runner/work/Go-To-Market-Analytics matched to
+[dbt/gtm_analytics_dbt/requirements*.txt or **/pyproject.toml],
+make sure you have checked out the target repository
+```
+The `setup-python` step uses `cache: pip` with `cache-dependency-path: dbt/gtm_analytics_dbt/requirements*.txt` to fingerprint the pip cache. GitHub Actions evaluates that glob before running any other step — if the file doesn't exist, the step fails in seconds and the entire job dies before dbt is even installed.
+
+The dbt project was scaffolded without a `requirements.txt` because the original intent was to hardcode `pip install dbt-bigquery` directly in the workflow YAML. That's the root cause: the cache path referenced a file that was never created.
+
+### Fix
+1. Created `dbt/gtm_analytics_dbt/requirements.txt` with `dbt-bigquery>=1.8.0`.
+2. Changed both `dbt_ci.yml` and `freshness.yml` install steps from `pip install dbt-bigquery` to `pip install -r requirements.txt` — version is now controlled from one file, not scattered across workflow YAML.
+
+### Lesson
+Always create `requirements.txt` before writing a workflow that references it in `cache-dependency-path`. The cache path glob is evaluated at job startup — a missing file kills the job before a single meaningful step runs. Also: never hardcode package versions in workflow YAML. Pin them in `requirements.txt` so upgrades are a one-line change in one file, not a hunt across multiple workflow files.
+
+---
+
+## P-005 — dbt profiles.yml: keyfile path breaks CI; use service-account-json with env_var()
+
+**Phase:** Phase 1 (dbt foundation)
+**Date:** 2026-06-15
+
+### Problem
+The scaffolded `profiles.yml` used `keyfile: <path-to-gcp-service-account-json>` — a static file path. This works on a developer machine where the file exists, but breaks in CI because:
+- The runner has no access to a local keyfile
+- Hardcoded paths make the profile environment-specific and non-portable
+- The project placeholders `<your-gcp-project-id>` were never replaced, so `dbt parse` would fail immediately
+
+### What we did
+Replaced the `keyfile` approach with `method: service-account-json` for the `prod` target and `method: oauth` for `dev`:
+
+```yaml
+prod:
+  type: bigquery
+  method: service-account-json
+  project: "{{ env_var('DBT_BQ_PROJECT', 'obito-492802') }}"
+  keyfile_json: "{{ env_var('GCP_SERVICE_ACCOUNT_JSON') | fromjson }}"
+```
+
+`GCP_SERVICE_ACCOUNT_JSON` is the same single JSON secret already used by the dlt pipeline — one secret, both tools.
+
+The `dev` target uses `method: oauth` so developers authenticate once with `gcloud auth application-default login` and never touch a keyfile.
+
+### Lesson
+Never scaffold a `profiles.yml` with `keyfile:` and commit it. It will always break CI. The correct pattern for BigQuery in any CI/CD environment is `method: service-account-json` + `env_var()`. For GCP-native compute (Cloud Functions, Cloud Run), use `method: oauth` — ADC handles it with zero config.
+
+---
+
+## P-006 — dbt CI: dbt build beats dbt run + dbt test; state:modified+ beats full rebuild
+
+**Phase:** Phase 1 (dbt foundation)
+**Date:** 2026-06-15
+
+### Problem
+The naive CI pattern (`dbt run` then `dbt test`) has two inefficiencies:
+1. Running all models on every PR rebuild is slow and wastes BigQuery slot time as the project grows.
+2. Separating `run` and `test` means seeds are often forgotten and source freshness is never checked in PR CI.
+
+### What we did
+**`dbt build`** replaces `dbt run + dbt test`. It runs seeds, models, snapshots, and tests in dependency order in a single command. Nothing gets skipped.
+
+**`--select state:modified+ --defer --state ./target`** limits the build to only models changed in the PR and all their downstream dependents. Unmodified upstream models are deferred — dbt reads their results from the prod manifest instead of rebuilding them. This keeps PR CI fast regardless of project size.
+
+Two separate workflows, not one:
+- `dbt_ci.yml` — triggers on code changes, runs the slim build
+- `freshness.yml` — nightly cron, runs `dbt source freshness`, alerts Slack on failure
+
+### Lesson
+From the first PR: use `dbt build --select state:modified+ --defer`. Full rebuilds on every PR become impractical once the project has more than ~20 models. The `--defer` flag is the key — it lets you test a change in isolation without rebuilding the entire lineage. Split freshness into its own nightly workflow so it does not block PR CI.
+
+---
+
 ## P-004 — BigQuery credentials: single JSON secret beats five separate fields
 
 **Phase:** Phase 0 (dlt ingestion — Attio)

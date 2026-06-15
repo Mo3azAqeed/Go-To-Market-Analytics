@@ -30,7 +30,7 @@ jobs:
           cache-dependency-path: dbt/gtm_analytics_dbt/requirements*.txt
 
       - name: Install dbt
-        run: pip install dbt-bigquery
+        run: pip install -r requirements.txt
 
       - name: Install dbt packages
         run: dbt deps --profiles-dir profiles --target prod

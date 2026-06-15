@@ -8,9 +8,12 @@ on:
     paths:
       - "dlt/**"
 
-# All secrets are passed as environment variables — no secrets.toml file is written.
-# dlt maps env vars to config using __ as section separator (all uppercase).
-# See dlt/README.md § "Environment variables" for the full mapping.
+# Credentials strategy:
+# - Attio API token → ATTIO_SOURCE__API_TOKEN (dlt resolves by function name prefix)
+# - BigQuery → DESTINATION__BIGQUERY__CREDENTIALS set to the full service account JSON string.
+#   dlt parses it natively — no newline-escaping issues that come with splitting the key
+#   into separate fields (BQ_PRIVATE_KEY, BQ_CLIENT_EMAIL, etc.).
+# - location and project_id are non-secret and live in .dlt/config.toml.
 
 jobs:
   test:
@@ -40,15 +43,9 @@ jobs:
     needs: test
 
     env:
-      SOURCES__ATTIO_SOURCE__API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
-      SOURCES__ATTIO_SOURCE__MQL_LIST_ID: ${{ secrets.ATTIO_MQL_LIST_ID }}
-      DESTINATION__BIGQUERY__LOCATION: "US"
-      DESTINATION__BIGQUERY__CREDENTIALS__PROJECT_ID: "obito-492802"
-      DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY_ID: ${{ secrets.BQ_PRIVATE_KEY_ID }}
-      DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY: ${{ secrets.BQ_PRIVATE_KEY }}
-      DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_EMAIL: ${{ secrets.BQ_CLIENT_EMAIL }}
-      DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_ID: ${{ secrets.BQ_CLIENT_ID }}
-      DESTINATION__BIGQUERY__CREDENTIALS__TOKEN_URI: "https://oauth2.googleapis.com/token"
+      ATTIO_SOURCE__API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
+      ATTIO_SOURCE__MQL_LIST_ID: ${{ secrets.ATTIO_MQL_LIST_ID }}
+      DESTINATION__BIGQUERY__CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     steps:
       - uses: actions/checkout@v4
@@ -84,15 +81,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     env:
-      SOURCES__ATTIO_SOURCE__API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
-      SOURCES__ATTIO_SOURCE__MQL_LIST_ID: ${{ secrets.ATTIO_MQL_LIST_ID }}
-      DESTINATION__BIGQUERY__LOCATION: "US"
-      DESTINATION__BIGQUERY__CREDENTIALS__PROJECT_ID: "obito-492802"
-      DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY_ID: ${{ secrets.BQ_PRIVATE_KEY_ID }}
-      DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY: ${{ secrets.BQ_PRIVATE_KEY }}
-      DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_EMAIL: ${{ secrets.BQ_CLIENT_EMAIL }}
-      DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_ID: ${{ secrets.BQ_CLIENT_ID }}
-      DESTINATION__BIGQUERY__CREDENTIALS__TOKEN_URI: "https://oauth2.googleapis.com/token"
+      ATTIO_SOURCE__API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
+      ATTIO_SOURCE__MQL_LIST_ID: ${{ secrets.ATTIO_MQL_LIST_ID }}
+      DESTINATION__BIGQUERY__CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     steps:
       - uses: actions/checkout@v4

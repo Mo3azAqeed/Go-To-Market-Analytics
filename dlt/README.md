@@ -28,27 +28,54 @@ pip install -r requirements.txt
 dlt reads configuration from environment variables using `__` as the section
 separator (all uppercase). No `secrets.toml` file is needed.
 
-| Variable | Value |
-|---|---|
-| `SOURCES__ATTIO_SOURCE__API_TOKEN` | Attio API token (Settings → API) |
-| `SOURCES__ATTIO_SOURCE__MQL_LIST_ID` | Attio MQL list ID (can also stay in `config.toml`) |
-| `DESTINATION__BIGQUERY__CREDENTIALS__PROJECT_ID` | `obito-492802` |
-| `DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY_ID` | From GCP service account JSON |
-| `DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY` | From GCP service account JSON |
-| `DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_EMAIL` | From GCP service account JSON |
-| `DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_ID` | From GCP service account JSON |
-| `DESTINATION__BIGQUERY__CREDENTIALS__TOKEN_URI` | `https://oauth2.googleapis.com/token` |
-| `DESTINATION__BIGQUERY__LOCATION` | `US` |
+| Variable | Where it's needed | Value |
+|---|---|---|
+| `ATTIO_SOURCE__API_TOKEN` | Local + CI + Cloud Function | Attio API token (Settings → API) |
+| `ATTIO_SOURCE__MQL_LIST_ID` | Local + CI + Cloud Function | Attio MQL list ID |
+| `DESTINATION__BIGQUERY__CREDENTIALS` | Local + CI only | Full service account JSON string |
+
+`location` and `project_id` are non-secret and live in `.dlt/config.toml` — no env var needed.
+
+**Why one JSON credential, not five separate fields:**
+Splitting the service account JSON into separate fields (`PRIVATE_KEY`, `CLIENT_EMAIL`, etc.) breaks
+because the RSA private key contains literal newlines which get mangled in shell env vars.
+Passing the full JSON string to `DESTINATION__BIGQUERY__CREDENTIALS` avoids this — dlt parses it natively.
 
 **Locally** — export before running:
 ```bash
-export SOURCES__ATTIO_SOURCE__API_TOKEN="your-token"
-export DESTINATION__BIGQUERY__CREDENTIALS__PROJECT_ID="obito-492802"
-# ... etc.
+export ATTIO_SOURCE__API_TOKEN="your-token"
+export ATTIO_SOURCE__MQL_LIST_ID="lst_abc123"
+export DESTINATION__BIGQUERY__CREDENTIALS='{"type":"service_account","project_id":"obito-492802","private_key":"...","client_email":"...",...}'
+python pipelines/attio_pipeline.py
 ```
 
-**In GitHub Actions** — add each as a repository secret (Settings → Secrets → Actions),
-then reference with `${{ secrets.SECRET_NAME }}`. The workflow handles this automatically.
+**In GitHub Actions** — add two secrets (Settings → Secrets → Actions):
+- `GCP_SERVICE_ACCOUNT_JSON` — paste the full contents of the service account JSON file
+- `ATTIO_API_TOKEN` — Attio API token
+- `ATTIO_MQL_LIST_ID` — Attio MQL list ID
+
+The workflow maps these to the correct env vars automatically.
+
+---
+
+## Deploying as a Cloud Function (scheduled automation)
+
+On Cloud Functions, BigQuery authentication works via **Application Default Credentials (ADC)** — the function's attached service account authenticates automatically. You do **not** set `DESTINATION__BIGQUERY__CREDENTIALS`.
+
+**Setup steps:**
+
+1. Deploy the function with entry point `attio_sync` from `dlt/pipelines/attio_pipeline.py`.
+2. Attach a service account that has `BigQuery Data Editor` + `BigQuery Job User` roles.
+3. Set two environment variables on the function:
+   ```
+   ATTIO_SOURCE__API_TOKEN   = <your-attio-api-token>   (from Secret Manager recommended)
+   ATTIO_SOURCE__MQL_LIST_ID = <your-mql-list-id>
+   ```
+4. Create a **Cloud Scheduler** job pointing at the function URL, cron: `0 * * * *` (every hour).
+
+**Pipeline state** (cursor positions for incremental loading) is stored in BigQuery's
+`raw_attio._dlt_pipeline_state` table — it persists across invocations automatically.
+No local filesystem dependency.
 
 ### 3. Configure the MQL list ID
 

@@ -4,6 +4,34 @@ Running log of every problem hit during this build, what we tried, and what we c
 
 ---
 
+## P-004 — BigQuery credentials: single JSON secret beats five separate fields
+
+**Phase:** Phase 0 (dlt ingestion — Attio)
+**Date:** 2026-06-15
+
+### Problem
+Initially the CI workflow passed BigQuery service account credentials as five separate environment variables: `BQ_PRIVATE_KEY`, `BQ_PRIVATE_KEY_ID`, `BQ_CLIENT_EMAIL`, `BQ_CLIENT_ID`, `BQ_TOKEN_URI`. This is fragile because the RSA private key contains literal newlines which are frequently mangled when a multi-line string is injected as a shell environment variable. The result is a silent auth failure: dlt loads without error but BigQuery rejects the key signature.
+
+### Decision
+Pass the full service account JSON as **one secret** (`GCP_SERVICE_ACCOUNT_JSON`) and set:
+```
+DESTINATION__BIGQUERY__CREDENTIALS=<full JSON string>
+```
+dlt's BigQuery adapter accepts a JSON string for the credentials field and parses it internally — no shell escaping, no newline issues, one secret to rotate.
+
+### Cloud Functions: no BigQuery credentials needed at all
+When the pipeline runs as a Cloud Function, the function's attached service account authenticates to BigQuery automatically via Application Default Credentials (ADC). `DESTINATION__BIGQUERY__CREDENTIALS` is not set. Only the Attio token is needed as an env var. This is the correct pattern for any GCP-native deployment.
+
+### Changes made
+- `dlt_ci.yml`: replaced five `BQ_*` env vars with `DESTINATION__BIGQUERY__CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}`.
+- `attio_pipeline.py`: added `attio_sync(request)` Cloud Function entry point with ADC note.
+- `dlt/README.md`: documented both the CI (JSON credential) path and the Cloud Function (ADC) path.
+
+### Lesson
+Never split a service account key into separate env vars for CI. The RSA private key is a multi-line PEM block; shells and YAML parsers corrupt it. Always pass the JSON blob whole. For GCP-native compute (Cloud Functions, Cloud Run, GKE), don't pass credentials at all — attach the right service account and let ADC handle it.
+
+---
+
 ## P-003 — secrets.toml replaced by environment variables
 
 **Phase:** Phase 0 (dlt ingestion — Attio)

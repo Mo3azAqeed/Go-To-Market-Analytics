@@ -9,4 +9,3 @@ mql_list_id = "<your-attio-mql-list-id>"
 
 [destination.bigquery]
 location = "US"
-project_id = "obito-492802"

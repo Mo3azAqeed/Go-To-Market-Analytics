@@ -1,0 +1,12 @@
+# dlt non-secret configuration — safe to commit.
+# Secrets (API token, GCP key) go in secrets.toml (gitignored).
+
+[attio_source]
+# The Attio list ID for MQLs (People list).
+# Find it: open the list in Attio → copy ID from the URL.
+# e.g. https://app.attio.com/lists/lst_abc123 → "lst_abc123"
+mql_list_id = "<your-attio-mql-list-id>"
+
+[destination.bigquery]
+location = "US"
+project_id = "obito-492802"

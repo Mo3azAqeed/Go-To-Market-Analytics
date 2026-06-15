@@ -4,6 +4,37 @@ Running log of every problem hit during this build, what we tried, and what we c
 
 ---
 
+## P-003 — secrets.toml replaced by environment variables
+
+**Phase:** Phase 0 (dlt ingestion — Attio)
+**Date:** 2026-06-15
+
+### Problem
+Initially configured dlt credentials via `.dlt/secrets.toml`. This approach has two risks:
+- The file must be created manually on every machine and in every CI environment, creating an easy path to accidental commits.
+- Writing the file from CI (echoing secrets into a shell heredoc) is fragile and exposes secret values in shell history and CI logs.
+
+### Decision
+Use dlt's native environment variable support instead. dlt maps env vars to config sections using `__` as the separator (all uppercase):
+
+| secrets.toml key | Environment variable |
+|---|---|
+| `[attio_source] api_token` | `SOURCES__ATTIO_SOURCE__API_TOKEN` |
+| `[destination.bigquery.credentials] private_key` | `DESTINATION__BIGQUERY__CREDENTIALS__PRIVATE_KEY` |
+| `[destination.bigquery.credentials] client_email` | `DESTINATION__BIGQUERY__CREDENTIALS__CLIENT_EMAIL` |
+
+In GitHub Actions, secrets are passed directly as `env:` entries on each job — no file is written, no heredoc, no shell escaping issues.
+
+### Changes made
+- Deleted `dlt/.dlt/secrets.toml`.
+- Rewrote `.github/workflows/dlt_ci.yml` to pass all credentials as `env:` vars.
+- Updated `dlt/README.md` with the full env var reference table.
+
+### Lesson
+For any dlt project in a CI/CD context, prefer environment variables over `secrets.toml`. The `secrets.toml` file is useful for solo local dev but does not scale to teams or automation. The `__` separator convention is easy to remember: take the TOML path, replace dots and brackets with `__`, uppercase everything.
+
+---
+
 ## P-002 — Cube images blocked removal by stopped containers
 
 **Phase:** Pre-Phase 0 (environment cleanup)

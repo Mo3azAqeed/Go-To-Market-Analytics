@@ -49,3 +49,14 @@ cube/node_modules/
 *.csv~
 .credentials/
 secrets/
+
+# dlt
+dlt/.dlt/secrets.toml
+dlt/.dlt/config.local.toml
+dlt/.pipeline/
+dlt/**/__pycache__/
+
+# GCP service account keys — never commit
+*-credentials.json
+*-service-account.json
+obito-*.json

@@ -1,23 +1,37 @@
 gtm_analytics:
   outputs:
+
+    # ------------------------------------------------------------------ #
+    # dev — local development                                              #
+    # Auth: Application Default Credentials (run once: gcloud auth        #
+    #       application-default login)                                     #
+    # ------------------------------------------------------------------ #
     dev:
       type: bigquery
-      project: <your-gcp-project-id>
+      method: oauth
+      project: "{{ env_var('DBT_BQ_PROJECT', 'obito-492802') }}"
       dataset: gtm_analytics_dev
       threads: 4
       timeout_seconds: 300
       location: US
       priority: interactive
       retries: 1
-      keyfile: <path-to-gcp-service-account-json>
+
+    # ------------------------------------------------------------------ #
+    # prod — CI and Cloud Function                                         #
+    # Auth: full service account JSON passed as env var                   #
+    # GCP_SERVICE_ACCOUNT_JSON — same secret used by the dlt pipeline     #
+    # ------------------------------------------------------------------ #
     prod:
       type: bigquery
-      project: <your-gcp-project-id>
+      method: service-account-json
+      project: "{{ env_var('DBT_BQ_PROJECT', 'obito-492802') }}"
       dataset: gtm_analytics_prod
+      keyfile_json: "{{ env_var('GCP_SERVICE_ACCOUNT_JSON') | fromjson }}"
       threads: 8
       timeout_seconds: 300
       location: US
       priority: batch
       retries: 3
-      keyfile: <path-to-gcp-service-account-json>
+
   target: dev

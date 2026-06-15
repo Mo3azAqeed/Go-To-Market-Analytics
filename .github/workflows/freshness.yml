@@ -1,0 +1,51 @@
+name: dbt source freshness
+
+on:
+  schedule:
+    - cron: "0 6 * * *"    # 06:00 UTC daily — after the nightly ops sync completes
+  workflow_dispatch:        # allow manual trigger from GitHub Actions UI
+
+env:
+  DBT_BQ_PROJECT: "obito-492802"
+  GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+  DBT_PROFILES_DIR: profiles
+
+jobs:
+  freshness:
+    name: Check source freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: dbt/gtm_analytics_dbt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: dbt/gtm_analytics_dbt/requirements*.txt
+
+      - name: Install dbt
+        run: pip install dbt-bigquery
+
+      - name: Install dbt packages
+        run: dbt deps --profiles-dir profiles --target prod
+
+      - name: Run source freshness check
+        run: dbt source freshness --profiles-dir profiles --target prod
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": ":warning: *dbt source freshness failed* — one or more raw sources in `obito-492802` are past their SLA.\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

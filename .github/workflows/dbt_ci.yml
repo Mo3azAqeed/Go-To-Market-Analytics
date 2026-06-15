@@ -1,0 +1,98 @@
+name: dbt CI
+
+on:
+  push:
+    paths:
+      - "dbt/**"
+      - "cube/**"
+  pull_request:
+    paths:
+      - "dbt/**"
+      - "cube/**"
+
+# Credentials follow the same pattern as dlt_ci.yml:
+# - GCP_SERVICE_ACCOUNT_JSON: full service account JSON string (no newline issues)
+# - profiles.yml reads it via env_var('GCP_SERVICE_ACCOUNT_JSON') | fromjson
+# - DBT_BQ_PROJECT: non-secret, hardcoded to obito-492802
+
+env:
+  DBT_BQ_PROJECT: "obito-492802"
+  GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+  DBT_PROFILES_DIR: profiles
+
+jobs:
+  dbt-ci:
+    name: Parse, build, and test changed models
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: dbt/gtm_analytics_dbt
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # needed for state:modified+ comparison
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: dbt/gtm_analytics_dbt/requirements*.txt
+
+      - name: Install dbt
+        run: pip install dbt-bigquery
+
+      - name: Install dbt packages
+        run: dbt deps --profiles-dir profiles --target prod
+
+      - name: Validate project compiles
+        run: dbt parse --profiles-dir profiles --target prod
+
+      - name: Build changed models and run their tests
+        run: |
+          dbt build \
+            --profiles-dir profiles \
+            --target prod \
+            --select state:modified+ \
+            --defer \
+            --state ./target
+        # state:modified+ builds only models changed in this PR and all downstream
+        # --defer uses the prod manifest for unmodified upstream models
+
+      - name: Seed reference data
+        if: contains(github.event.head_commit.message, '[seed]') || github.ref == 'refs/heads/main'
+        run: dbt seed --profiles-dir profiles --target prod
+
+  full-build:
+    name: Full build on merge to main
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: dbt-ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: dbt/gtm_analytics_dbt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: dbt/gtm_analytics_dbt/requirements*.txt
+
+      - name: Install dbt
+        run: pip install dbt-bigquery
+
+      - name: Install dbt packages
+        run: dbt deps --profiles-dir profiles --target prod
+
+      - name: Seed reference data
+        run: dbt seed --profiles-dir profiles --target prod
+
+      - name: Build all models and run all tests
+        run: dbt build --profiles-dir profiles --target prod

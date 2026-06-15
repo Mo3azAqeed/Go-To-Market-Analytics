@@ -2,7 +2,7 @@ version: 2
 
 sources:
   - name: raw_attio
-    database: <gcp-project-id>
+    database: obito-492802
     schema: raw_attio
     freshness:
       warn_after: { count: 8, period: hour }
@@ -19,7 +19,7 @@ sources:
         description: Sales activities from Attio
 
   - name: raw_ops
-    database: <gcp-project-id>
+    database: obito-492802
     schema: raw_ops
     freshness:
       warn_after: { count: 8, period: hour }

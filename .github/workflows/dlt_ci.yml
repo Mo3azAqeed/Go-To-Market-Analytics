@@ -44,7 +44,6 @@ jobs:
 
     env:
       ATTIO_SOURCE__API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
-      ATTIO_SOURCE__MQL_LIST_ID: ${{ secrets.ATTIO_MQL_LIST_ID }}
       DESTINATION__BIGQUERY__CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     steps:
@@ -68,7 +67,7 @@ jobs:
           from sources.attio import attio_source
           source = attio_source()
           resource_names = list(source.resources.keys())
-          expected = {"mqls", "closed_deals", "sdrs", "sales_activities"}
+          expected = {"mqls", "sqls", "workspace_members", "sales_activities"}
           missing = expected - set(resource_names)
           assert not missing, f"Missing resources: {missing}"
           print("Dry-run passed. Resources:", resource_names)
@@ -82,7 +81,6 @@ jobs:
 
     env:
       ATTIO_SOURCE__API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
-      ATTIO_SOURCE__MQL_LIST_ID: ${{ secrets.ATTIO_MQL_LIST_ID }}
       DESTINATION__BIGQUERY__CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
     steps:

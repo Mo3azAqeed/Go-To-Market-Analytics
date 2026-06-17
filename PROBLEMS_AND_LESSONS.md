@@ -4,6 +4,41 @@ Running log of every problem hit during this build, what we tried, and what we c
 
 ---
 
+## P-008 — Attio API: objects not lists, POST not GET, underscore not hyphen
+
+**Phase:** Phase 0 (dlt ingestion — Attio)
+**Date:** 2026-06-17
+
+### Problem
+The initial Attio source had three wrong assumptions, all discovered via live API calls:
+
+1. **MQLs are a custom object, not a list.** The source used `POST /v2/lists/{mql_list_id}/entries/query`. MQLs are a custom Attio object with `api_slug: "mqls"`. The correct endpoint is `POST /v2/objects/mqls/records/query`. A `mql_list_id` config value was never needed.
+
+2. **There is no `deals` object.** The workspace has four objects: `mqls`, `sqls`, `people`, `companies`. The `sqls` object IS the conversion event — it carries `won_date`, `seller_id`, `sdr_id`, `sr_id`, `segment`, and `lead_type`. No stage filter is needed; every record in `sqls` is a closed deal by definition.
+
+3. **Record queries use POST, not GET.** `GET /v2/objects/mqls/records` returns 404. Attio's query endpoint for object records is always `POST /v2/objects/{slug}/records/query`. Incremental filter goes in the POST body as `{"filter": {"created_at": {"$gte": "<cursor>"}}}`.
+
+4. **Workspace members endpoint uses underscore.** `GET /v2/workspace-members` (hyphen) returns 404. The correct endpoint is `GET /v2/workspace_members` (underscore).
+
+5. **No `updated_at` on records.** Records only expose `created_at` at the top level. The cursor therefore tracks `created_at`. For bulk-imported historical data, records are immutable after creation so this is sufficient.
+
+### Fix
+- `mqls` resource: `POST /v2/objects/mqls/records/query` with `{"filter": {"created_at": {"$gte": cursor}}}`
+- Renamed `closed_deals` → `sqls` to match the actual object slug
+- Renamed `sdrs` → `workspace_members`, fixed endpoint to `GET /v2/workspace_members`
+- Removed `mql_list_id` from source signature, `attio_source`, pipeline docstring, `config.toml`, CI env vars, and GitHub secrets
+- Added `conftest.py` at `dlt/` level so `sources.*` is importable when pytest runs from that directory
+- Rewrote all unit tests with fixture shapes taken directly from live API responses
+
+### Lesson
+Always verify API assumptions with live calls before writing the source. Specifically for Attio:
+- Custom objects are queried via `POST /v2/objects/{slug}/records/query` — not GET, not via lists
+- Pagination goes in the POST body: `{"limit": N, "offset": N, ...filter}`
+- Endpoint naming inconsistencies (hyphen vs underscore) are not documented — test with curl first
+- Before adding a config value (`mql_list_id`), confirm via API that the concept exists in the target workspace
+
+---
+
 ## P-007 — dbt CI failed in 7s: requirements.txt missing, cache-dependency-path broke setup-python
 
 **Phase:** Phase 1 (dbt foundation)

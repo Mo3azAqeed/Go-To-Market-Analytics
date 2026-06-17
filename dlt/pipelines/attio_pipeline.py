@@ -7,8 +7,7 @@ Local run (from dlt/ directory):
 Cloud Function (HTTP trigger, Gen 2):
     Entry point: attio_sync
     Runtime env vars required:
-        ATTIO_SOURCE__API_TOKEN   — Attio API token (from Secret Manager)
-        ATTIO_SOURCE__MQL_LIST_ID — Attio MQL list ID
+        ATTIO_SOURCE__API_TOKEN — Attio API token (from Secret Manager)
     BigQuery auth: handled automatically via the function's attached service account (ADC).
     No DESTINATION__BIGQUERY__CREDENTIALS needed in Cloud Functions.
 
@@ -35,7 +34,7 @@ def attio_sync(request):
     """
     Cloud Function entry point (HTTP trigger, Gen 2).
 
-    Triggered by Cloud Scheduler on a cron schedule (every 1 hour).
+    Triggered by Cloud Scheduler on a cron schedule (every 6 hour).
     Authentication to BigQuery uses the function's attached service account via ADC —
     no credential env vars required.
     """

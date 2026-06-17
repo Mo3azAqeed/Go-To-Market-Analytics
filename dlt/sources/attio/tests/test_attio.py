@@ -5,90 +5,89 @@ Tests are isolated from the real Attio API — HTTP calls are mocked.
 Run from the dlt/ directory:
     pytest sources/attio/tests/
 
+Fixtures match the actual Attio API v2 response shapes verified 2026-06-17.
+
 Coverage
 --------
 1. Schema validation   — every resource yields rows with the expected columns
-2. Cursor progression  — incremental cursor advances after a successful load
+2. Scalar extraction   — nested Attio value format unwrapped correctly
 3. Auth failure        — 401 response raises an exception, not silently empty
-4. CDC event types     — not applicable for Attio REST; covered in ops tests
+4. Pagination          — full page (500 rows) triggers a second request
+5. Cursor filter       — incremental filter uses created_at with $gte operator
 """
 
 from __future__ import annotations
 
-import json
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pendulum
 import pytest
 
+
 # ---------------------------------------------------------------------------
-# Fixture helpers
+# Fixture helpers — match real API shapes verified via live calls
 # ---------------------------------------------------------------------------
 
-MQL_ENTRY = {
-    "id": {"list_id": "list_abc", "entry_id": "entry_001"},
-    "entry_values": {
-        "origin": [{"attribute_type": "select", "value": {"option_id": "opt1", "title": "organic"}}],
-        "first_contact_date": [{"attribute_type": "date", "value": "2024-01-15"}],
+MQL_RECORD = {
+    "id": {
+        "workspace_id": "ws1",
+        "object_id": "22ec9de3-696e-4403-91f2-5cf0417ac000",
+        "record_id": "000825a4-4e87-45b7-a836-927c19965591",
     },
-    "created_at": "2024-01-15T10:00:00.000Z",
-    "updated_at": "2024-02-01T09:00:00.000Z",
-}
-
-DEAL_RECORD = {
-    "id": {"object_id": "obj_deals", "record_id": "deal_001"},
+    "created_at": "2026-06-13T14:52:06.007000000Z",
     "values": {
-        "mql_id": [{"attribute_type": "text", "value": "entry_001"}],
-        "seller_id": [{"attribute_type": "text", "value": "seller_xyz"}],
-        "won_date": [{"attribute_type": "date", "value": "2024-02-10"}],
-        "business_segment": [{"attribute_type": "select", "value": {"title": "home_decor"}}],
-        "lead_type": [{"attribute_type": "select", "value": {"title": "inbound"}}],
-        "stage": [{"attribute_type": "select", "value": {"title": "won"}}],
+        "mql_id": [{"attribute_type": "text", "value": "8cc73dd2a42ac2d64984ddb3c72f633b"}],
+        "first_contact_date": [{"attribute_type": "date", "value": "2017-10-28"}],
+        "landing_page_id": [{"attribute_type": "text", "value": "f017be4dbf86243af5c1ebed0cff36a2"}],
+        "origin": [{"attribute_type": "text", "value": "organic_search"}],
     },
-    "created_at": "2024-01-20T08:00:00.000Z",
-    "updated_at": "2024-02-10T11:00:00.000Z",
 }
 
-SDR_MEMBER = {
-    "id": {"workspace_id": "ws1", "workspace_member_id": "sdr_001"},
-    "first_name": "Ana",
-    "last_name": "Lima",
-    "email_address": "ana@example.com",
-    "created_at": "2023-06-01T00:00:00.000Z",
+SQL_RECORD = {
+    "id": {
+        "workspace_id": "ws1",
+        "object_id": "cfcedef9-b879-45f1-b83f-1dafeec4b022",
+        "record_id": "0000b9c6-08d0-5f27-a15e-370c2fa9ffca",
+    },
+    "created_at": "2026-06-13T15:05:16.458000000Z",
+    "values": {
+        "mql_id": [{"attribute_type": "text", "value": "caea756b29bd071f00ce526f40645a78"}],
+        "seller_id": [{"attribute_type": "text", "value": "fadb07c842a2aef5d5a676b85f220e71"}],
+        "sdr_id": [{"attribute_type": "text", "value": "4b339f9567d060bcea4f5136b9f5949e"}],
+        "sr_id": [{"attribute_type": "text", "value": "d3d1e91a157ea7f90548eef82f1955e3"}],
+        "won_date": [{"attribute_type": "date", "value": "2018-04-10"}],
+        "segment": [{"attribute_type": "text", "value": "sports_leisure"}],
+        "lead_type": [{"attribute_type": "text", "value": "online_medium"}],
+    },
+}
+
+WORKSPACE_MEMBER = {
+    "id": {"workspace_id": "ws1", "workspace_member_id": "9dd38721-cf33-4ae3-b7ee-3a3a42e8b2fe"},
+    "first_name": "moaz",
+    "last_name": "mohamed",
+    "email_address": "moaz@example.com",
+    "access_level": "admin",
+    "created_at": "2026-06-13T14:30:12.205000000Z",
 }
 
 NOTE_RECORD = {
     "id": {"note_id": "note_001"},
-    "parent_object": "deals",
-    "parent_record_id": "deal_001",
+    "parent_object": "sqls",
+    "parent_record_id": "0000b9c6-08d0-5f27-a15e-370c2fa9ffca",
     "title": "First call",
-    "created_at": "2024-01-22T14:00:00.000Z",
-    "created_by_actor": {"type": "workspace-member", "id": "sdr_001"},
+    "created_at": "2026-06-14T10:00:00.000Z",
+    "created_by_actor": {"type": "workspace-member", "id": "9dd38721-cf33-4ae3-b7ee-3a3a42e8b2fe"},
 }
 
 
-def _mock_post_response(data: list[dict]) -> MagicMock:
+def _mock_response(data: list[dict], status: int = 200) -> MagicMock:
     mock = MagicMock()
-    mock.status_code = 200
-    mock.raise_for_status = MagicMock()
+    mock.status_code = status
     mock.json.return_value = {"data": data}
-    return mock
-
-
-def _mock_get_response(data: list[dict]) -> MagicMock:
-    mock = MagicMock()
-    mock.status_code = 200
-    mock.raise_for_status = MagicMock()
-    mock.json.return_value = {"data": data}
-    return mock
-
-
-def _mock_401() -> MagicMock:
-    mock = MagicMock()
-    mock.status_code = 401
-    mock.raise_for_status.side_effect = Exception("401 Unauthorized")
-    mock.json.return_value = {"error": "Unauthorized"}
+    if status >= 400:
+        mock.raise_for_status.side_effect = Exception(f"{status} Error")
+    else:
+        mock.raise_for_status = MagicMock()
     return mock
 
 
@@ -97,103 +96,110 @@ def _mock_401() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestMqlsSchema:
-    REQUIRED_FIELDS = {"mql_id", "list_id", "origin", "first_contact_date", "last_modified", "created_at", "_extracted_at"}
+    REQUIRED_FIELDS = {
+        "record_id", "mql_id", "first_contact_date", "landing_page_id",
+        "origin", "created_at", "_extracted_at",
+    }
 
     def test_yields_expected_fields(self):
         from sources.attio import mqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_post_response([MQL_ENTRY])):
-            rows = list(mqls(api_token="tok", mql_list_id="list_abc"))
+        with patch("sources.attio.requests.post", return_value=_mock_response([MQL_RECORD])):
+            rows = list(mqls(api_token="tok"))
 
         assert len(rows) == 1
         row = rows[0]
         assert self.REQUIRED_FIELDS.issubset(row.keys()), f"Missing: {self.REQUIRED_FIELDS - row.keys()}"
 
-    def test_scalar_extraction(self):
+    def test_scalar_values_extracted(self):
         from sources.attio import mqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_post_response([MQL_ENTRY])):
-            rows = list(mqls(api_token="tok", mql_list_id="list_abc"))
+        with patch("sources.attio.requests.post", return_value=_mock_response([MQL_RECORD])):
+            rows = list(mqls(api_token="tok"))
 
         row = rows[0]
-        assert row["mql_id"] == "entry_001"
-        assert row["list_id"] == "list_abc"
-        assert row["origin"] == "organic"
-        assert row["first_contact_date"] == "2024-01-15"
-        assert row["last_modified"] == "2024-02-01T09:00:00.000Z"
+        assert row["record_id"] == "000825a4-4e87-45b7-a836-927c19965591"
+        assert row["mql_id"] == "8cc73dd2a42ac2d64984ddb3c72f633b"
+        assert row["origin"] == "organic_search"
+        assert row["first_contact_date"] == "2017-10-28"
+        assert row["created_at"] == "2026-06-13T14:52:06.007000000Z"
 
     def test_extracted_at_is_utc_iso(self):
         from sources.attio import mqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_post_response([MQL_ENTRY])):
-            rows = list(mqls(api_token="tok", mql_list_id="list_abc"))
+        with patch("sources.attio.requests.post", return_value=_mock_response([MQL_RECORD])):
+            rows = list(mqls(api_token="tok"))
 
-        extracted_at = rows[0]["_extracted_at"]
-        parsed = pendulum.parse(extracted_at)
+        parsed = pendulum.parse(rows[0]["_extracted_at"])
         assert parsed.timezone_name in ("UTC", "+00:00")
 
 
-class TestClosedDealsSchema:
+class TestSqlsSchema:
     REQUIRED_FIELDS = {
-        "deal_id", "mql_id", "seller_id", "won_date",
-        "business_segment", "lead_type", "last_modified", "created_at", "_extracted_at",
+        "record_id", "mql_id", "seller_id", "sdr_id", "sr_id",
+        "won_date", "segment", "lead_type", "created_at", "_extracted_at",
     }
 
     def test_yields_expected_fields(self):
-        from sources.attio import closed_deals
+        from sources.attio import sqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_post_response([DEAL_RECORD])):
-            rows = list(closed_deals(api_token="tok"))
+        with patch("sources.attio.requests.post", return_value=_mock_response([SQL_RECORD])):
+            rows = list(sqls(api_token="tok"))
 
         assert len(rows) == 1
         row = rows[0]
         assert self.REQUIRED_FIELDS.issubset(row.keys()), f"Missing: {self.REQUIRED_FIELDS - row.keys()}"
 
-    def test_seller_id_populated(self):
-        from sources.attio import closed_deals
+    def test_all_id_fields_populated(self):
+        from sources.attio import sqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_post_response([DEAL_RECORD])):
-            rows = list(closed_deals(api_token="tok"))
-
-        assert rows[0]["seller_id"] == "seller_xyz"
-
-    def test_business_segment_from_select(self):
-        from sources.attio import closed_deals
-
-        with patch("sources.attio.requests.post", return_value=_mock_post_response([DEAL_RECORD])):
-            rows = list(closed_deals(api_token="tok"))
-
-        assert rows[0]["business_segment"] == "home_decor"
-
-
-class TestSdrsSchema:
-    def test_yields_members_with_extracted_at(self):
-        from sources.attio import sdrs
-
-        with patch("sources.attio.requests.get", return_value=_mock_get_response([SDR_MEMBER])):
-            rows = list(sdrs(api_token="tok"))
-
-        assert len(rows) == 1
-        assert "_extracted_at" in rows[0]
-        assert rows[0]["first_name"] == "Ana"
-
-    def test_passthrough_fields_preserved(self):
-        from sources.attio import sdrs
-
-        with patch("sources.attio.requests.get", return_value=_mock_get_response([SDR_MEMBER])):
-            rows = list(sdrs(api_token="tok"))
+        with patch("sources.attio.requests.post", return_value=_mock_response([SQL_RECORD])):
+            rows = list(sqls(api_token="tok"))
 
         row = rows[0]
-        assert row["email_address"] == "ana@example.com"
+        assert row["record_id"] == "0000b9c6-08d0-5f27-a15e-370c2fa9ffca"
+        assert row["seller_id"] == "fadb07c842a2aef5d5a676b85f220e71"
+        assert row["sdr_id"] == "4b339f9567d060bcea4f5136b9f5949e"
+        assert row["segment"] == "sports_leisure"
+        assert row["won_date"] == "2018-04-10"
+
+
+class TestWorkspaceMembersSchema:
+    REQUIRED_FIELDS = {
+        "workspace_member_id", "first_name", "last_name",
+        "email_address", "access_level", "created_at", "_extracted_at",
+    }
+
+    def test_yields_expected_fields(self):
+        from sources.attio import workspace_members
+
+        with patch("sources.attio.requests.get", return_value=_mock_response([WORKSPACE_MEMBER])):
+            rows = list(workspace_members(api_token="tok"))
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert self.REQUIRED_FIELDS.issubset(row.keys()), f"Missing: {self.REQUIRED_FIELDS - row.keys()}"
+
+    def test_member_id_extracted_from_nested_id(self):
+        from sources.attio import workspace_members
+
+        with patch("sources.attio.requests.get", return_value=_mock_response([WORKSPACE_MEMBER])):
+            rows = list(workspace_members(api_token="tok"))
+
+        assert rows[0]["workspace_member_id"] == "9dd38721-cf33-4ae3-b7ee-3a3a42e8b2fe"
+        assert rows[0]["email_address"] == "moaz@example.com"
 
 
 class TestSalesActivitiesSchema:
-    REQUIRED_FIELDS = {"activity_id", "parent_object", "parent_record_id", "title", "created_at", "_extracted_at"}
+    REQUIRED_FIELDS = {
+        "activity_id", "parent_object", "parent_record_id",
+        "title", "created_at", "_extracted_at",
+    }
 
     def test_yields_expected_fields(self):
         from sources.attio import sales_activities
 
-        with patch("sources.attio.requests.get", return_value=_mock_get_response([NOTE_RECORD])):
+        with patch("sources.attio.requests.get", return_value=_mock_response([NOTE_RECORD])):
             rows = list(sales_activities(api_token="tok"))
 
         assert len(rows) == 1
@@ -202,53 +208,50 @@ class TestSalesActivitiesSchema:
     def test_note_id_as_activity_id(self):
         from sources.attio import sales_activities
 
-        with patch("sources.attio.requests.get", return_value=_mock_get_response([NOTE_RECORD])):
+        with patch("sources.attio.requests.get", return_value=_mock_response([NOTE_RECORD])):
             rows = list(sales_activities(api_token="tok"))
 
         assert rows[0]["activity_id"] == "note_001"
 
 
 # ---------------------------------------------------------------------------
-# Cursor progression
+# Cursor filter
 # ---------------------------------------------------------------------------
 
-class TestCursorProgression:
-    def test_mqls_cursor_filter_applied(self):
-        """The filter sent to Attio uses the current cursor value."""
+class TestCursorFilter:
+    def test_mqls_sends_created_at_gte_filter(self):
+        """POST body must include created_at $gte filter for incremental loading."""
         from sources.attio import mqls
-
-        captured_body: list[dict] = []
-
-        def fake_post(url, headers=None, json=None, timeout=None):
-            captured_body.append(json)
-            return _mock_post_response([])
-
-        resource = mqls(api_token="tok", mql_list_id="list_abc")
-        # Override the cursor's last_value to simulate a previous run
-        resource.incremental._cursor_path = "last_modified"
-
-        with patch("sources.attio.requests.post", side_effect=fake_post):
-            list(resource)
-
-        assert len(captured_body) >= 1
-        sent_filter = captured_body[0].get("filter", {})
-        assert "updated_at" in sent_filter
-
-    def test_closed_deals_filter_includes_stage_won(self):
-        """Filter for closed_deals always includes stage=won."""
-        from sources.attio import closed_deals
 
         captured: list[dict] = []
 
         def fake_post(url, headers=None, json=None, timeout=None):
             captured.append(json)
-            return _mock_post_response([])
+            return _mock_response([])
 
         with patch("sources.attio.requests.post", side_effect=fake_post):
-            list(closed_deals(api_token="tok"))
+            list(mqls(api_token="tok"))
+
+        assert len(captured) >= 1
+        sent_filter = captured[0].get("filter", {})
+        assert "created_at" in sent_filter
+        assert "$gte" in sent_filter["created_at"]
+
+    def test_sqls_sends_created_at_gte_filter(self):
+        from sources.attio import sqls
+
+        captured: list[dict] = []
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.append(json)
+            return _mock_response([])
+
+        with patch("sources.attio.requests.post", side_effect=fake_post):
+            list(sqls(api_token="tok"))
 
         sent_filter = captured[0].get("filter", {})
-        assert sent_filter.get("stage", {}).get("$eq") == "won"
+        assert "created_at" in sent_filter
+        assert "$gte" in sent_filter["created_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -259,28 +262,28 @@ class TestAuthFailure:
     def test_mqls_raises_on_401(self):
         from sources.attio import mqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_401()):
+        with patch("sources.attio.requests.post", return_value=_mock_response([], 401)):
             with pytest.raises(Exception, match="401"):
-                list(mqls(api_token="bad_token", mql_list_id="list_abc"))
+                list(mqls(api_token="bad_token"))
 
-    def test_closed_deals_raises_on_401(self):
-        from sources.attio import closed_deals
+    def test_sqls_raises_on_401(self):
+        from sources.attio import sqls
 
-        with patch("sources.attio.requests.post", return_value=_mock_401()):
+        with patch("sources.attio.requests.post", return_value=_mock_response([], 401)):
             with pytest.raises(Exception, match="401"):
-                list(closed_deals(api_token="bad_token"))
+                list(sqls(api_token="bad_token"))
 
-    def test_sdrs_raises_on_401(self):
-        from sources.attio import sdrs
+    def test_workspace_members_raises_on_401(self):
+        from sources.attio import workspace_members
 
-        with patch("sources.attio.requests.get", return_value=_mock_401()):
+        with patch("sources.attio.requests.get", return_value=_mock_response([], 401)):
             with pytest.raises(Exception, match="401"):
-                list(sdrs(api_token="bad_token"))
+                list(workspace_members(api_token="bad_token"))
 
     def test_sales_activities_raises_on_401(self):
         from sources.attio import sales_activities
 
-        with patch("sources.attio.requests.get", return_value=_mock_401()):
+        with patch("sources.attio.requests.get", return_value=_mock_response([], 401)):
             with pytest.raises(Exception, match="401"):
                 list(sales_activities(api_token="bad_token"))
 
@@ -290,24 +293,41 @@ class TestAuthFailure:
 # ---------------------------------------------------------------------------
 
 class TestPagination:
-    def test_mqls_fetches_all_pages(self):
-        """When first page is full (500 rows), a second request is made."""
+    def test_mqls_fetches_second_page_when_first_is_full(self):
+        """A full page (500 rows) triggers a second POST request."""
         from sources.attio import mqls
 
-        full_page = [MQL_ENTRY] * 500
-        partial_page = [MQL_ENTRY] * 3
+        full_page = [MQL_RECORD] * 500
+        partial_page = [MQL_RECORD] * 7
 
         call_count = 0
 
         def fake_post(url, headers=None, json=None, timeout=None):
             nonlocal call_count
             call_count += 1
-            if call_count == 1:
-                return _mock_post_response(full_page)
-            return _mock_post_response(partial_page)
+            return _mock_response(full_page if call_count == 1 else partial_page)
 
         with patch("sources.attio.requests.post", side_effect=fake_post):
-            rows = list(mqls(api_token="tok", mql_list_id="list_abc"))
+            rows = list(mqls(api_token="tok"))
+
+        assert call_count == 2
+        assert len(rows) == 507
+
+    def test_sqls_fetches_second_page_when_first_is_full(self):
+        from sources.attio import sqls
+
+        full_page = [SQL_RECORD] * 500
+        partial_page = [SQL_RECORD] * 3
+
+        call_count = 0
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            nonlocal call_count
+            call_count += 1
+            return _mock_response(full_page if call_count == 1 else partial_page)
+
+        with patch("sources.attio.requests.post", side_effect=fake_post):
+            rows = list(sqls(api_token="tok"))
 
         assert call_count == 2
         assert len(rows) == 503
